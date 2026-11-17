@@ -156,6 +156,7 @@ export function SiteFooter() {
                   setSubscribed(false);
                 }}
                 placeholder="your e-mail"
+                suppressHydrationWarning
                 type="email"
                 value={email}
               />
