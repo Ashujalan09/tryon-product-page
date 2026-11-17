@@ -3,8 +3,12 @@
 import {
   Camera,
   Check,
+  Crop,
   Download,
   ImagePlus,
+  Minus,
+  Plus,
+  RotateCcw,
   ShieldCheck,
   Trash2,
   X,
@@ -13,16 +17,30 @@ import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 
 import { formatInr, type Product } from "@/lib/catalog";
+import {
+  clamp,
+  type CropTransform,
+  DEFAULT_CROP_TRANSFORM,
+  getImageFrameLayout,
+  getSlotAspect,
+  loadImageElement,
+  renderCroppedImage,
+  type UploadedImage,
+} from "@/lib/image-crop";
 
 const MAX_FILES = 5;
 const MAX_BYTES = 12 * 1024 * 1024;
 
 interface TryOnStudioProps {
-  onApply: (images: string[]) => void;
+  onApply: (images: UploadedImage[]) => void;
   onClose: () => void;
   open: boolean;
   product: Product;
-  userImages: string[];
+  userImages: UploadedImage[];
+}
+
+function hasCustomTransform(transform: CropTransform): boolean {
+  return transform.scale !== 1 || transform.offsetX !== 0 || transform.offsetY !== 0;
 }
 
 export function TryOnStudio({
@@ -32,18 +50,30 @@ export function TryOnStudio({
   product,
   userImages,
 }: TryOnStudioProps) {
-  const [drafts, setDrafts] = useState<string[]>(userImages);
+  const [drafts, setDrafts] = useState<UploadedImage[]>(userImages);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [dragItem, setDragItem] = useState<number | null>(null);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [cropDraft, setCropDraft] = useState<CropTransform>(DEFAULT_CROP_TRANSFORM);
+  const [isApplyingCrop, setIsApplyingCrop] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
+  const cropFrameRef = useRef<HTMLDivElement>(null);
+  const dragStartRef = useRef<{
+    pointerId: number;
+    clientX: number;
+    clientY: number;
+    offsetX: number;
+    offsetY: number;
+  } | null>(null);
   const created = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!open) return;
     setDrafts(userImages);
     setError(null);
+    setEditingIndex(null);
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const onKeyDown = (event: KeyboardEvent) => {
@@ -56,10 +86,10 @@ export function TryOnStudio({
     };
   }, [onClose, open, userImages]);
 
-  function accept(list: FileList | null) {
+  async function accept(list: FileList | null) {
     if (!list?.length) return;
     const files = Array.from(list);
-    const accepted: string[] = [];
+    const pendingUrls: string[] = [];
 
     for (const file of files) {
       if (!file.type.startsWith("image/")) {
@@ -70,62 +100,155 @@ export function TryOnStudio({
         setError("Some files were skipped — each image must be under 12 MB.");
         continue;
       }
-      if (drafts.length + accepted.length >= MAX_FILES) break;
+      if (drafts.length + pendingUrls.length >= MAX_FILES) break;
       const url = URL.createObjectURL(file);
       created.current.add(url);
-      accepted.push(url);
+      pendingUrls.push(url);
     }
 
-    if (accepted.length > 0) {
-      setDrafts((current) => [...current, ...accepted].slice(0, MAX_FILES));
-      setError(null);
-    }
+    if (pendingUrls.length === 0) return;
+
+    const accepted: UploadedImage[] = await Promise.all(
+      pendingUrls.map(async (url) => {
+        try {
+          const img = await loadImageElement(url);
+          return {
+            id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : url,
+            originalUrl: url,
+            croppedUrl: url,
+            naturalWidth: img.naturalWidth || 1,
+            naturalHeight: img.naturalHeight || 1,
+            transform: DEFAULT_CROP_TRANSFORM,
+          };
+        } catch {
+          return {
+            id: url,
+            originalUrl: url,
+            croppedUrl: url,
+            naturalWidth: 1,
+            naturalHeight: 1,
+            transform: DEFAULT_CROP_TRANSFORM,
+          };
+        }
+      }),
+    );
+
+    setDrafts((current) => [...current, ...accepted].slice(0, MAX_FILES));
+    setError(null);
+  }
+
+  async function rebakeMovedSlots(previous: UploadedImage[], next: UploadedImage[]) {
+    const updated = await Promise.all(
+      next.map(async (item, newIndex) => {
+        const oldIndex = previous.findIndex((entry) => entry.id === item.id);
+        const wasHero = oldIndex === 0;
+        const isHero = newIndex === 0;
+        if (wasHero === isHero || !hasCustomTransform(item.transform)) return item;
+        const croppedUrl = await renderCroppedImage(
+          item.originalUrl,
+          item.transform,
+          getSlotAspect(newIndex),
+        );
+        if (croppedUrl !== item.originalUrl) created.current.add(croppedUrl);
+        return { ...item, croppedUrl };
+      }),
+    );
+    setDrafts(updated);
   }
 
   function remove(index: number) {
+    if (editingIndex !== null) setEditingIndex(null);
     setDrafts((current) => current.filter((_, entryIndex) => entryIndex !== index));
   }
 
   function move(index: number, direction: -1 | 1) {
-    setDrafts((current) => {
-      const target = index + direction;
-      if (target < 0 || target >= current.length) return current;
-      const next = [...current];
-      [next[index], next[target]] = [next[target], next[index]];
-      return next;
-    });
+    if (editingIndex !== null) setEditingIndex(null);
+    const target = index + direction;
+    if (target < 0 || target >= drafts.length) return;
+    const next = [...drafts];
+    [next[index], next[target]] = [next[target], next[index]];
+    setDrafts(next);
+    void rebakeMovedSlots(drafts, next);
   }
 
   function makeHero(index: number) {
-    setDrafts((current) => {
-      if (index === 0) return current;
-      const next = [...current];
-      const [item] = next.splice(index, 1);
-      return [item, ...next];
-    });
+    if (index === 0) return;
+    if (editingIndex !== null) setEditingIndex(null);
+    const next = [...drafts];
+    const [item] = next.splice(index, 1);
+    const reordered = [item, ...next];
+    setDrafts(reordered);
+    void rebakeMovedSlots(drafts, reordered);
   }
 
   function reorder(from: number, to: number) {
-    setDrafts((current) => {
-      if (from === to) return current;
-      const next = [...current];
-      const [item] = next.splice(from, 1);
-      next.splice(to, 0, item);
-      return next;
-    });
+    if (from === to) return;
+    if (editingIndex !== null) setEditingIndex(null);
+    const next = [...drafts];
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item);
+    setDrafts(next);
+    void rebakeMovedSlots(drafts, next);
+  }
+
+  function startCrop(index: number) {
+    const item = drafts[index];
+    if (!item) return;
+    setEditingIndex(index);
+    setCropDraft(item.transform);
+  }
+
+  function cancelCrop() {
+    setEditingIndex(null);
+  }
+
+  async function applyCrop() {
+    if (editingIndex === null) return;
+    const item = drafts[editingIndex];
+    if (!item) return;
+
+    setIsApplyingCrop(true);
+    try {
+      let nextCroppedUrl = item.originalUrl;
+      if (hasCustomTransform(cropDraft)) {
+        nextCroppedUrl = await renderCroppedImage(
+          item.originalUrl,
+          cropDraft,
+          getSlotAspect(editingIndex),
+        );
+        if (nextCroppedUrl !== item.originalUrl) {
+          created.current.add(nextCroppedUrl);
+        }
+      }
+      setDrafts((current) =>
+        current.map((entry, idx) =>
+          idx === editingIndex ? { ...entry, croppedUrl: nextCroppedUrl, transform: cropDraft } : entry,
+        ),
+      );
+      setEditingIndex(null);
+    } finally {
+      setIsApplyingCrop(false);
+    }
   }
 
   function clearAll() {
-    for (const url of drafts) {
-      if (created.current.has(url)) URL.revokeObjectURL(url);
+    for (const item of drafts) {
+      if (created.current.has(item.originalUrl)) URL.revokeObjectURL(item.originalUrl);
+      if (created.current.has(item.croppedUrl)) URL.revokeObjectURL(item.croppedUrl);
     }
     setDrafts([]);
+    setEditingIndex(null);
     setError(null);
   }
 
   function apply() {
+    const activeUrls = new Set<string>();
+    for (const item of drafts) {
+      activeUrls.add(item.originalUrl);
+      activeUrls.add(item.croppedUrl);
+    }
     for (const url of created.current) {
-      if (!drafts.includes(url)) URL.revokeObjectURL(url);
+      if (!activeUrls.has(url)) URL.revokeObjectURL(url);
     }
     onApply(drafts);
     onClose();
@@ -134,6 +257,8 @@ export function TryOnStudio({
   if (!open) return null;
 
   const [first] = drafts;
+  const editingItem = editingIndex !== null ? drafts[editingIndex] : null;
+
 
   return (
     <div className="fixed inset-0 z-(--z-overlay) flex items-stretch justify-center desktop:items-center">
@@ -165,22 +290,199 @@ export function TryOnStudio({
 
           <div className="relative flex flex-col items-center p-5 desktop:min-h-0 desktop:flex-1 desktop:overflow-y-auto desktop:p-8">
             <div className="my-auto flex w-full flex-col items-center gap-3">
-            {first ? (
+            {editingItem && editingIndex !== null ? (
+              (() => {
+                const frameAspect = getSlotAspect(editingIndex);
+                const layout = getImageFrameLayout(
+                  editingItem.naturalWidth,
+                  editingItem.naturalHeight,
+                  frameAspect,
+                  cropDraft,
+                );
+                return (
+                  <div className="flex w-full max-w-[420px] flex-col items-center gap-4">
+                    <div className="flex w-full items-center justify-between">
+                      <p className="type-label text-ink">
+                        Adjust crop &amp; scale · {editingIndex === 0 ? "Hero" : `Gallery ${editingIndex + 1}`}
+                      </p>
+                      <button
+                        className="type-label focus-ring flex items-center gap-1 text-ink-muted hover:text-ink"
+                        onClick={() => setCropDraft(DEFAULT_CROP_TRANSFORM)}
+                        type="button"
+                      >
+                        <RotateCcw className="size-3" strokeWidth={1.25} />
+                        Reset
+                      </button>
+                    </div>
+
+                    <div
+                      className={`relative w-full overflow-hidden bg-paper shadow-modal select-none touch-none cursor-grab active:cursor-grabbing ${
+                        editingIndex === 0
+                          ? "max-w-[300px] aspect-[800/1432]"
+                          : "max-w-[360px] aspect-[3/4]"
+                      }`}
+                      onPointerCancel={() => {
+                        dragStartRef.current = null;
+                      }}
+                      onPointerDown={(event) => {
+                        event.currentTarget.setPointerCapture(event.pointerId);
+                        dragStartRef.current = {
+                          pointerId: event.pointerId,
+                          clientX: event.clientX,
+                          clientY: event.clientY,
+                          offsetX: cropDraft.offsetX,
+                          offsetY: cropDraft.offsetY,
+                        };
+                      }}
+                      onPointerMove={(event) => {
+                        const start = dragStartRef.current;
+                        const frame = cropFrameRef.current;
+                        if (!start || start.pointerId !== event.pointerId || !frame) return;
+
+                        const rect = frame.getBoundingClientRect();
+                        const dx = event.clientX - start.clientX;
+                        const dy = event.clientY - start.clientY;
+
+                        const maxPxX = rect.width * (layout.maxOffsetXPct / 100);
+                        const maxPxY = rect.height * (layout.maxOffsetYPct / 100);
+
+                        setCropDraft((prev) => ({
+                          ...prev,
+                          offsetX: maxPxX > 0 ? clamp(start.offsetX + dx / maxPxX, -1, 1) : 0,
+                          offsetY: maxPxY > 0 ? clamp(start.offsetY + dy / maxPxY, -1, 1) : 0,
+                        }));
+                      }}
+                      onPointerUp={(event) => {
+                        if (dragStartRef.current?.pointerId === event.pointerId) {
+                          dragStartRef.current = null;
+                        }
+                      }}
+                      onWheel={(event) => {
+                        event.preventDefault();
+                        setCropDraft((prev) => ({
+                          ...prev,
+                          scale: clamp(Number((prev.scale - event.deltaY * 0.002).toFixed(2)), 1, 3),
+                        }));
+                      }}
+                      ref={cropFrameRef}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        alt="Adjust crop and scale"
+                        className="pointer-events-none absolute max-w-none"
+                        draggable={false}
+                        src={editingItem.originalUrl}
+                        style={{
+                          width: `${layout.widthPct}%`,
+                          height: `${layout.heightPct}%`,
+                          left: `${layout.leftPct}%`,
+                          top: `${layout.topPct}%`,
+                        }}
+                      />
+                      {/* Rule-of-thirds overlay */}
+                      <div
+                        aria-hidden="true"
+                        className="pointer-events-none absolute inset-0 grid grid-cols-3 grid-rows-3 border border-white/40"
+                      >
+                        <span className="border-r border-b border-white/25" />
+                        <span className="border-r border-b border-white/25" />
+                        <span className="border-b border-white/25" />
+                        <span className="border-r border-b border-white/25" />
+                        <span className="border-r border-b border-white/25" />
+                        <span className="border-b border-white/25" />
+                        <span className="border-r border-white/25" />
+                        <span className="border-r border-white/25" />
+                        <span />
+                      </div>
+                    </div>
+
+                    <div className="grid w-full gap-2 border border-rule bg-paper p-3">
+                      <div className="flex items-center gap-3">
+                        <button
+                          aria-label="Zoom out"
+                          className="focus-ring flex size-7 shrink-0 items-center justify-center border border-rule text-ink disabled:opacity-35"
+                          disabled={cropDraft.scale <= 1}
+                          onClick={() =>
+                            setCropDraft((prev) => ({
+                              ...prev,
+                              scale: clamp(Number((prev.scale - 0.1).toFixed(2)), 1, 3),
+                            }))
+                          }
+                          type="button"
+                        >
+                          <Minus className="size-3.5" strokeWidth={1.25} />
+                        </button>
+                        <input
+                          aria-label="Scale image"
+                          className="h-1 flex-1 cursor-pointer accent-ink"
+                          max={3}
+                          min={1}
+                          onChange={(event) =>
+                            setCropDraft((prev) => ({
+                              ...prev,
+                              scale: Number(event.target.value),
+                            }))
+                          }
+                          step={0.05}
+                          type="range"
+                          value={cropDraft.scale}
+                        />
+                        <button
+                          aria-label="Zoom in"
+                          className="focus-ring flex size-7 shrink-0 items-center justify-center border border-rule text-ink disabled:opacity-35"
+                          disabled={cropDraft.scale >= 3}
+                          onClick={() =>
+                            setCropDraft((prev) => ({
+                              ...prev,
+                              scale: clamp(Number((prev.scale + 0.1).toFixed(2)), 1, 3),
+                            }))
+                          }
+                          type="button"
+                        >
+                          <Plus className="size-3.5" strokeWidth={1.25} />
+                        </button>
+                        <span className="type-label w-10 shrink-0 text-right tabular-nums text-ink">
+                          {Math.round(cropDraft.scale * 100)}%
+                        </span>
+                      </div>
+                      <p className="type-label text-center text-ink-muted">
+                        Drag inside the frame to reposition · Scroll or slide to scale
+                      </p>
+                    </div>
+                  </div>
+                );
+              })()
+            ) : first ? (
               <>
-                <figure className="relative aspect-[4/5] w-full max-w-[420px] overflow-hidden bg-paper shadow-modal">
+                <figure className="relative aspect-[800/1432] w-full max-w-[340px] overflow-hidden bg-paper shadow-modal">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img alt="Your uploaded image, enlarged" className="h-full w-full object-cover" src={first} />
+                  <img
+                    alt="Your uploaded image, enlarged"
+                    className="h-full w-full object-cover"
+                    src={first.croppedUrl}
+                  />
                   <span className="type-label absolute top-3 left-3 bg-paper px-2 py-1">
                     Your image · enlarged
                   </span>
-                  <button
-                    aria-label="Remove enlarged image"
-                    className="absolute top-2 right-2 flex size-8 items-center justify-center bg-paper/90 text-ink transition-colors hover:bg-ink hover:text-inverse"
-                    onClick={() => remove(0)}
-                    type="button"
-                  >
-                    <X className="size-4" strokeWidth={1.25} />
-                  </button>
+                  <div className="absolute top-2 right-2 flex items-center gap-1">
+                    <button
+                      aria-label="Crop and scale enlarged image"
+                      className="type-label flex h-8 items-center gap-1 bg-paper/90 px-2.5 text-ink transition-colors hover:bg-ink hover:text-inverse"
+                      onClick={() => startCrop(0)}
+                      type="button"
+                    >
+                      <Crop className="size-3.5" strokeWidth={1.25} />
+                      Crop
+                    </button>
+                    <button
+                      aria-label="Remove enlarged image"
+                      className="flex size-8 items-center justify-center bg-paper/90 text-ink transition-colors hover:bg-ink hover:text-inverse"
+                      onClick={() => remove(0)}
+                      type="button"
+                    >
+                      <X className="size-4" strokeWidth={1.25} />
+                    </button>
+                  </div>
                   <div className="absolute inset-x-0 bottom-0 flex items-end justify-between gap-4 bg-gradient-to-t from-black/55 to-transparent p-4 text-inverse">
                     <div className="grid gap-0.5">
                       <p className="type-label">Lorem Ipsum · {product.colorName}</p>
@@ -192,18 +494,32 @@ export function TryOnStudio({
 
                 {drafts.length > 1 ? (
                   <div className="grid w-full max-w-[420px] grid-cols-2 gap-2">
-                    {drafts.slice(1).map((src, index) => (
-                      <figure className="relative aspect-[3/4] overflow-hidden bg-paper" key={src}>
+                    {drafts.slice(1).map((item, index) => (
+                      <figure className="relative aspect-[3/4] overflow-hidden bg-paper" key={item.id}>
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img alt={`Your uploaded image ${index + 2}`} className="h-full w-full object-cover" src={src} />
-                        <button
-                          aria-label={`Remove image ${index + 2}`}
-                          className="absolute top-1.5 right-1.5 flex size-6 items-center justify-center bg-paper/90 text-ink transition-colors hover:bg-ink hover:text-inverse"
-                          onClick={() => remove(index + 1)}
-                          type="button"
-                        >
-                          <X className="size-3" strokeWidth={1.25} />
-                        </button>
+                        <img
+                          alt={`Your uploaded image ${index + 2}`}
+                          className="h-full w-full object-cover"
+                          src={item.croppedUrl}
+                        />
+                        <div className="absolute top-1.5 right-1.5 flex items-center gap-1">
+                          <button
+                            aria-label={`Crop and scale image ${index + 2}`}
+                            className="flex size-6 items-center justify-center bg-paper/90 text-ink transition-colors hover:bg-ink hover:text-inverse"
+                            onClick={() => startCrop(index + 1)}
+                            type="button"
+                          >
+                            <Crop className="size-3" strokeWidth={1.25} />
+                          </button>
+                          <button
+                            aria-label={`Remove image ${index + 2}`}
+                            className="flex size-6 items-center justify-center bg-paper/90 text-ink transition-colors hover:bg-ink hover:text-inverse"
+                            onClick={() => remove(index + 1)}
+                            type="button"
+                          >
+                            <X className="size-3" strokeWidth={1.25} />
+                          </button>
+                        </div>
                       </figure>
                     ))}
                   </div>
@@ -262,7 +578,34 @@ export function TryOnStudio({
             </div>
           </div>
 
-          {first ? (
+          {editingItem ? (
+            <div className="flex shrink-0 flex-wrap items-center justify-center gap-2 border-t border-rule bg-paper px-5 py-4">
+              <button
+                className="type-control flex h-9 items-center gap-2 border border-rule px-4 uppercase text-ink-muted focus-ring hover:border-ink hover:text-ink"
+                onClick={cancelCrop}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="type-control flex h-9 items-center gap-2 border border-ink px-4 uppercase focus-ring"
+                onClick={() => setCropDraft(DEFAULT_CROP_TRANSFORM)}
+                type="button"
+              >
+                <RotateCcw className="size-3.5" strokeWidth={1.25} />
+                Reset
+              </button>
+              <button
+                className="type-control flex h-9 items-center gap-2 bg-ink px-5 uppercase text-inverse focus-ring disabled:opacity-50"
+                disabled={isApplyingCrop}
+                onClick={() => void applyCrop()}
+                type="button"
+              >
+                <Check className="size-3.5" strokeWidth={1.5} />
+                {isApplyingCrop ? "Applying…" : "Apply crop"}
+              </button>
+            </div>
+          ) : first ? (
             <div className="flex shrink-0 flex-wrap items-center justify-center gap-2 border-t border-rule bg-paper px-5 py-4">
               <button
                 className="type-control flex h-9 items-center gap-2 border border-ink px-4 uppercase focus-ring"
@@ -275,7 +618,7 @@ export function TryOnStudio({
               <a
                 className="type-control flex h-9 items-center gap-2 border border-ink px-4 uppercase focus-ring"
                 download="lorem-ipsum-image"
-                href={first}
+                href={first.croppedUrl}
               >
                 <Download className="size-3.5" strokeWidth={1.25} />
                 Save
@@ -323,7 +666,7 @@ export function TryOnStudio({
                     className="object-cover"
                     fill
                     sizes="56px"
-                    src={first ?? product.images[0].src}
+                    src={first?.croppedUrl ?? product.images[0].src}
                   />
                 </div>
                 <div className="min-w-0">
@@ -345,11 +688,13 @@ export function TryOnStudio({
 
               {drafts.length > 0 ? (
                 <ul className="divide-y divide-rule border border-rule" role="list">
-                  {drafts.map((src, index) => (
+                  {drafts.map((item, index) => (
                     <li
-                      className="flex items-center gap-2 bg-paper px-2 py-2"
+                      className={`flex items-center gap-2 px-2 py-2 ${
+                        editingIndex === index ? "bg-surface" : "bg-paper"
+                      }`}
                       draggable
-                      key={src}
+                      key={item.id}
                       onDragOver={(event) => event.preventDefault()}
                       onDragStart={() => setDragItem(index)}
                       onDrop={(event) => {
@@ -363,12 +708,25 @@ export function TryOnStudio({
                       </span>
                       <span className="relative h-10 w-8 shrink-0 overflow-hidden bg-surface">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img alt="" className="h-full w-full object-cover" src={src} />
+                        <img alt="" className="h-full w-full object-cover" src={item.croppedUrl} />
                       </span>
                       <span className="type-label min-w-0 flex-1 truncate">
                         {index === 0 ? "Hero · enlarged" : `Gallery · two-up`}
                       </span>
                       <span className="flex shrink-0 items-center gap-0.5">
+                        <button
+                          aria-label={`Crop and scale image ${index + 1}`}
+                          className={`focus-ring flex size-7 items-center justify-center transition-colors ${
+                            editingIndex === index
+                              ? "bg-ink text-inverse"
+                              : "text-ink-muted hover:text-ink"
+                          }`}
+                          onClick={() => startCrop(index)}
+                          title="Crop & scale"
+                          type="button"
+                        >
+                          <Crop className="size-3.5" strokeWidth={1.25} />
+                        </button>
                         <button
                           aria-label={`Move image ${index + 1} up`}
                           className="focus-ring flex size-7 items-center justify-center text-ink-muted hover:text-ink disabled:opacity-30"

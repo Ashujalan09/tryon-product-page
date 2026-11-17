@@ -7,6 +7,7 @@ import { ProductMedia } from "@/components/pdp/product-media";
 import { Recommendations } from "@/components/pdp/recommendations";
 import { TryOnStudio } from "@/components/try-on/try-on-studio";
 import type { Product, Recommendation } from "@/lib/catalog";
+import type { UploadedImage } from "@/lib/image-crop";
 
 export function PdpExperience({
   product,
@@ -15,7 +16,7 @@ export function PdpExperience({
   product: Product;
   recommendations: Recommendation[];
 }) {
-  const [userImages, setUserImages] = useState<string[]>([]);
+  const [userImages, setUserImages] = useState<UploadedImage[]>([]);
   const [studioOpen, setStudioOpen] = useState(false);
 
   return (
@@ -28,7 +29,7 @@ export function PdpExperience({
               setUserImages((current) => current.filter((_, entryIndex) => entryIndex !== index))
             }
             onTryOn={() => setStudioOpen(true)}
-            userImages={userImages}
+            userImages={userImages.map((item) => item.croppedUrl)}
           />
         </div>
         <BuyPanel
