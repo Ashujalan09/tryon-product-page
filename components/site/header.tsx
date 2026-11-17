@@ -111,7 +111,7 @@ export function SiteHeader() {
   return (
     <>
       <header className="sticky top-0 z-(--z-header) h-(--header-bar-h)" data-app-header>
-        <div className="h-full border-b border-rule bg-paper">
+        <div className="h-full bg-paper">
           <div className="grid h-full grid-cols-[auto_1fr_auto] items-center gap-3 px-(--gutter) desktop:grid-cols-[1fr_auto_1fr]">
             <div className="flex min-w-0 items-center gap-2.5">
               <nav aria-label="Main menu" className="hidden desktop:block">

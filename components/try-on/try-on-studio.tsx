@@ -150,8 +150,8 @@ export function TryOnStudio({
         role="dialog"
       >
         {/* Preview */}
-        <div className="relative flex flex-col bg-surface desktop:min-h-[640px] desktop:flex-1">
-          <div className="flex items-center justify-between border-b border-rule px-5 py-3 desktop:hidden">
+        <div className="relative flex flex-col bg-surface desktop:min-h-0 desktop:flex-1">
+          <div className="flex shrink-0 items-center justify-between border-b border-rule px-5 py-3 desktop:hidden">
             <p className="type-label">Upload your images</p>
             <button
               aria-label="Close"
@@ -163,7 +163,8 @@ export function TryOnStudio({
             </button>
           </div>
 
-          <div className="relative flex flex-col items-center justify-center gap-3 p-5 desktop:flex-1 desktop:p-8">
+          <div className="relative flex flex-col items-center p-5 desktop:min-h-0 desktop:flex-1 desktop:overflow-y-auto desktop:p-8">
+            <div className="my-auto flex w-full flex-col items-center gap-3">
             {first ? (
               <>
                 <figure className="relative aspect-[4/5] w-full max-w-[420px] overflow-hidden bg-paper shadow-modal">
@@ -258,10 +259,11 @@ export function TryOnStudio({
                 </p>
               </div>
             )}
+            </div>
           </div>
 
           {first ? (
-            <div className="flex flex-wrap items-center justify-center gap-2 border-t border-rule bg-paper px-5 py-4">
+            <div className="flex shrink-0 flex-wrap items-center justify-center gap-2 border-t border-rule bg-paper px-5 py-4">
               <button
                 className="type-control flex h-9 items-center gap-2 border border-ink px-4 uppercase focus-ring"
                 onClick={() => fileRef.current?.click()}
@@ -291,8 +293,8 @@ export function TryOnStudio({
         </div>
 
         {/* Controls */}
-        <div className="flex w-full shrink-0 flex-col desktop:w-[360px] desktop:border-l desktop:border-rule">
-          <div className="hidden items-center justify-between border-b border-rule px-6 py-4 desktop:flex">
+        <div className="flex w-full shrink-0 flex-col desktop:min-h-0 desktop:w-[360px] desktop:border-l desktop:border-rule">
+          <div className="hidden shrink-0 items-center justify-between border-b border-rule px-6 py-4 desktop:flex">
             <p className="type-label">Upload your images</p>
             <button
               aria-label="Close image studio"
@@ -304,7 +306,7 @@ export function TryOnStudio({
             </button>
           </div>
 
-          <div className="grid flex-1 content-start gap-6 p-6">
+          <div className="grid flex-1 content-start gap-6 p-6 desktop:min-h-0 desktop:overflow-y-auto">
             <div className="grid gap-2">
               <p className="type-label text-ink-muted">01 — Add your images</p>
               <p className="pdp-copy text-ink-muted">
@@ -429,31 +431,6 @@ export function TryOnStudio({
               </p>
             ) : null}
 
-            <div className="grid gap-2">
-              <p className="type-label text-ink-muted">02 — Place them on the page</p>
-              <button
-                className="type-control flex h-11 w-full items-center justify-center gap-2 bg-ink uppercase text-inverse focus-ring disabled:cursor-not-allowed disabled:bg-input disabled:text-ink-muted"
-                disabled={drafts.length === 0}
-                onClick={apply}
-                type="button"
-              >
-                <Check className="size-4" strokeWidth={1.5} />
-                Add {drafts.length || ""} image{drafts.length === 1 ? "" : "s"} to the page
-              </button>
-              {userImages.length > 0 ? (
-                <button
-                  className="type-control h-9 w-full border border-rule text-ink-muted uppercase focus-ring"
-                  onClick={() => {
-                    onApply([]);
-                    onClose();
-                  }}
-                  type="button"
-                >
-                  Reset to product photos
-                </button>
-              ) : null}
-            </div>
-
             <div className="mt-auto flex items-start gap-2 border-t border-rule pt-4">
               <ShieldCheck className="mt-0.5 size-4 shrink-0" strokeWidth={1.25} />
               <p className="type-label text-ink-muted">
@@ -461,6 +438,31 @@ export function TryOnStudio({
                 server.
               </p>
             </div>
+          </div>
+
+          <div className="grid shrink-0 gap-2 border-t border-rule bg-paper p-6">
+            <p className="type-label text-ink-muted">02 — Place them on the page</p>
+            <button
+              className="type-control flex h-11 w-full items-center justify-center gap-2 bg-ink uppercase text-inverse focus-ring disabled:cursor-not-allowed disabled:bg-input disabled:text-ink-muted"
+              disabled={drafts.length === 0}
+              onClick={apply}
+              type="button"
+            >
+              <Check className="size-4" strokeWidth={1.5} />
+              Add {drafts.length || ""} image{drafts.length === 1 ? "" : "s"} to the page
+            </button>
+            {userImages.length > 0 ? (
+              <button
+                className="type-control h-9 w-full border border-rule text-ink-muted uppercase focus-ring"
+                onClick={() => {
+                  onApply([]);
+                  onClose();
+                }}
+                type="button"
+              >
+                Reset to product photos
+              </button>
+            ) : null}
           </div>
         </div>
 

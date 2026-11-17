@@ -132,7 +132,7 @@ export function ProductMedia({
 
       {/* Desktop: enlarged first image over a two-up tile grid */}
       <div className="hidden desktop:block desktop:pt-[75px]">
-        <div className="border border-ink">
+        <div>
           <div className="relative aspect-[800/1432] w-full overflow-hidden bg-surface">
             {showingUserImages ? (
               <>
