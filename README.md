@@ -21,10 +21,12 @@ connected to Shopify — product data lives in `lib/catalog.ts` and the bag is c
 
 ## Deploy to Vercel
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/NachiketKandari/tryon-product-page)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/import?s=https://github.com/NachiketKandari/tryon-product-page)
 
-1. Push this repository to GitHub (done).
-2. In Vercel: **Add New → Project → Import** the repo, or use the button above.
+The repository already exists, so use **Import Git Repository** (do not use “Clone”):
+
+1. Open https://vercel.com/new/import?s=https://github.com/NachiketKandari/tryon-product-page
+2. Choose **Import Git Repository → `NachiketKandari/tryon-product-page`**.
 3. Framework preset **Next.js**, root directory **`/`**. `vercel.json` already sets install/build
    commands; leave the environment variables empty.
 4. Deploy. `NEXT_PUBLIC_SITE_URL` is optional; set it only for a custom domain.
