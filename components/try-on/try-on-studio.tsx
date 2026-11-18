@@ -60,6 +60,8 @@ export function TryOnStudio({
   const fileRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
   const cropFrameRef = useRef<HTMLDivElement>(null);
+  const activePointersRef = useRef<Map<number, { clientX: number; clientY: number }>>(new Map());
+  const pinchStartRef = useRef<{ distance: number; scale: number } | null>(null);
   const dragStartRef = useRef<{
     pointerId: number;
     clientX: number;
@@ -321,20 +323,63 @@ export function TryOnStudio({
                           ? "max-w-[300px] aspect-[800/1432]"
                           : "max-w-[360px] aspect-[3/4]"
                       }`}
-                      onPointerCancel={() => {
-                        dragStartRef.current = null;
+                      onPointerCancel={(event) => {
+                        activePointersRef.current.delete(event.pointerId);
+                        if (activePointersRef.current.size < 2) {
+                          pinchStartRef.current = null;
+                        }
+                        if (activePointersRef.current.size === 0) {
+                          dragStartRef.current = null;
+                        }
                       }}
                       onPointerDown={(event) => {
                         event.currentTarget.setPointerCapture(event.pointerId);
-                        dragStartRef.current = {
-                          pointerId: event.pointerId,
+                        activePointersRef.current.set(event.pointerId, {
                           clientX: event.clientX,
                           clientY: event.clientY,
-                          offsetX: cropDraft.offsetX,
-                          offsetY: cropDraft.offsetY,
-                        };
+                        });
+
+                        if (activePointersRef.current.size === 2) {
+                          const [p1, p2] = Array.from(activePointersRef.current.values());
+                          pinchStartRef.current = {
+                            distance: Math.hypot(p2.clientX - p1.clientX, p2.clientY - p1.clientY) || 1,
+                            scale: cropDraft.scale,
+                          };
+                          dragStartRef.current = null;
+                        } else if (activePointersRef.current.size === 1) {
+                          pinchStartRef.current = null;
+                          dragStartRef.current = {
+                            pointerId: event.pointerId,
+                            clientX: event.clientX,
+                            clientY: event.clientY,
+                            offsetX: cropDraft.offsetX,
+                            offsetY: cropDraft.offsetY,
+                          };
+                        }
                       }}
                       onPointerMove={(event) => {
+                        if (activePointersRef.current.has(event.pointerId)) {
+                          activePointersRef.current.set(event.pointerId, {
+                            clientX: event.clientX,
+                            clientY: event.clientY,
+                          });
+                        }
+
+                        if (activePointersRef.current.size === 2 && pinchStartRef.current) {
+                          const [p1, p2] = Array.from(activePointersRef.current.values());
+                          const distance = Math.hypot(p2.clientX - p1.clientX, p2.clientY - p1.clientY);
+                          const nextScale = clamp(
+                            Number((pinchStartRef.current.scale * (distance / pinchStartRef.current.distance)).toFixed(2)),
+                            1,
+                            3,
+                          );
+                          setCropDraft((prev) => ({
+                            ...prev,
+                            scale: nextScale,
+                          }));
+                          return;
+                        }
+
                         const start = dragStartRef.current;
                         const frame = cropFrameRef.current;
                         if (!start || start.pointerId !== event.pointerId || !frame) return;
@@ -353,7 +398,22 @@ export function TryOnStudio({
                         }));
                       }}
                       onPointerUp={(event) => {
-                        if (dragStartRef.current?.pointerId === event.pointerId) {
+                        activePointersRef.current.delete(event.pointerId);
+                        if (activePointersRef.current.size < 2) {
+                          pinchStartRef.current = null;
+                        }
+                        if (activePointersRef.current.size === 1) {
+                          const [[remainingId, remainingPoint]] = Array.from(
+                            activePointersRef.current.entries(),
+                          );
+                          dragStartRef.current = {
+                            pointerId: remainingId,
+                            clientX: remainingPoint.clientX,
+                            clientY: remainingPoint.clientY,
+                            offsetX: cropDraft.offsetX,
+                            offsetY: cropDraft.offsetY,
+                          };
+                        } else if (activePointersRef.current.size === 0) {
                           dragStartRef.current = null;
                         }
                       }}
@@ -446,7 +506,7 @@ export function TryOnStudio({
                         </span>
                       </div>
                       <p className="type-label text-center text-ink-muted">
-                        Drag inside the frame to reposition · Scroll or slide to scale
+                        Drag to reposition · Pinch, scroll, or slide to scale
                       </p>
                     </div>
                   </div>
